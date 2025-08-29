@@ -5,8 +5,14 @@ int
 main (int argc, char **argv)
 {
   int i;
+  int start;
 
-  for (i = 0; i < argc; i++)
+  if (argc == 1){
+    return 0; // no argument
+  }
+  
+  
+  for (i = 1; i < argc; i++)
     printf ("%s ", argv[i]);
   printf ("\n");
 
