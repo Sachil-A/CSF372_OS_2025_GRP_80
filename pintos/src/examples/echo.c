@@ -8,6 +8,7 @@ main (int argc, char **argv)
   int start;
 
   if (argc == 1){
+    printf("\n");
     return 0; // no argument
   }
   
