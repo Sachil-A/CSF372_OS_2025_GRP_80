@@ -1,54 +1,37 @@
-#include <stdio.h>
-#include <syscall.h>
+// #include <stdio.h>
+// #include <syscall.h>
 
-#include <stdbool.h>
-#include <stdlib.h>
+// #include <stdbool.h>
+// #include <stdlib.h>
+#include <syscall.h>
+#include "lib/user/syscall.h"
+#include "lib/stdio.h"
+
 
 
 int main(int argc, char *argv[])
-{
-    printf("in main\n");
-    if (argc != 2)
-    {
-        // Handle the error case (e.g., print a usage message)
-        return -1; // Exit with a non-zero status for error
+{ 
+    
+    if (argc < 2) {
+        printf("Usage: touch <filename>\n");
+        return 1;  // failure if no filename
     }
-    // 2. Get the filename from the arguments.
-    const char *filename = argv[1];
-    //attempting creating a new file
-    bool success = create(filename, 0);
-    if (success)
-    {
-        // The file was created successfully.
-        // The assignment notes state that the command should succeed even if the file already exists.
-        // This is because the assignment does not require you to handle this case.
-       printf ("%s: created\n", filename);
-        
-        return 0;
-    }
-    else
-    {
-        // The file could not be created.
-        printf("fail\n");
-        return 0;
-    }
+    for(int i=1;i<argc;i++){
+    const char *filename = argv[i];
 
-    return 0;
-// if (argc != 2) {
-//         puts("usage: touch <filename>");
-//         return 1;
-//     }
-//     const char *filename = argv[1];
-//     int fd = open(filename);
-//     if (fd < 0) {
-//         if (!create(filename, 0)) {
-//             puts("touch: cannot create file");
-//             return 1;
-//         }
-//         for (size_t i = 0; filename[i]; i++) putchar(filename[i]);
-//         puts(": created");
-//     } else {
-//         close(fd);
-//     }
-//     return 0;
+    // Try to create the file (size = 0 bytes)
+    if (!create(filename, 0)) {
+        // If create fails, it might already exist
+        // Try opening it to check if it exists
+        int fd = open(filename);
+        if (fd < 0) {
+            return 1;
+        } else {
+            close(fd);
+        }
+    } else {
+        printf("%s: created\n", filename);
+    }}
+
+    return 0; // success
 }
