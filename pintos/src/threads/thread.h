@@ -83,25 +83,28 @@ typedef int tid_t;
 struct thread
   {
     /* Owned by thread.c. */
-    tid_t tid;                          /**< Thread identifier. */
-    enum thread_status status;          /**< Thread state. */
-    char name[16];                      /**< Name (for debugging purposes). */
-    uint8_t *stack;                     /**< Saved stack pointer. */
-    int priority;                       /**< Priority. */
-    struct list_elem allelem;           /**< List element for all threads list. */
+    tid_t tid;                          
+    enum thread_status status;          
+    char name[16];                      
+    uint8_t *stack;                     
+    int priority;                       /* Current effective priority */
+    struct list_elem allelem;           
 
+    /* NEW FIELDS FOR PRIORITY DONATION */
+    int original_priority;              /* Base priority before donations */
+    struct lock *waiting_on;            /* Lock this thread is waiting for */
+    struct list held_locks;             /* List of locks currently held */
+    
     /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /**< List element. */
+    struct list_elem elem;              
     struct list *fd_list; 
-    int next_fd;                   /**< Next file descriptor. */
+    int next_fd;                   
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /**< Page directory. */
+    uint32_t *pagedir;                  
 #endif
 
-    /* Owned by thread.c. */
-    unsigned magic;                     /**< Detects stack overflow. */
+    unsigned magic; 
   };
 
 /** If false (default), use round-robin scheduler.
@@ -140,5 +143,10 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 bool thread_priority_less (const struct list_elem *a, const struct list_elem *b, void *aux);
+
+
+void thread_donate_priority (struct thread *t);
+void thread_update_priority (struct thread *t);
+void thread_yield_if_not_highest (void);
 
 #endif /**< threads/thread.h */
