@@ -108,16 +108,39 @@ sema_try_down (struct semaphore *sema)
 void
 sema_up (struct semaphore *sema) 
 {
-  enum intr_level old_level;
+   enum intr_level old_level;
+  bool should_yield = false;
 
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
+  
   if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+    {
+      /* Sort waiters by priority (highest first) */
+      list_sort (&sema->waiters, thread_priority_less, NULL);
+      
+      /* Get the highest priority waiter */
+      struct thread *t = list_entry (list_pop_front (&sema->waiters),
+                                     struct thread, elem);
+      
+      /* Check if we should yield to this thread */
+      if (t->priority > thread_current()->priority)
+        {
+          should_yield = true;
+        }
+      
+      thread_unblock (t);
+    }
+  
   sema->value++;
   intr_set_level (old_level);
+  
+  /* Yield AFTER re-enabling interrupts if needed */
+  if (should_yield && !intr_context())
+    {
+      thread_yield();
+    }
 }
 
 static void sema_test_helper (void *sema_);
@@ -192,12 +215,42 @@ lock_init (struct lock *lock)
 void
 lock_acquire (struct lock *lock)
 {
+ struct thread *cur = thread_current ();
+  
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  enum intr_level old_level = intr_disable ();
+  
+  /* If someone holds the lock, we need to wait */
+  if (lock->holder != NULL) 
+    {
+      /* Mark that we're waiting on this lock */
+      cur->waiting_on = lock;
+      
+      /* Donate our priority to the holder */
+      thread_donate_priority (lock->holder);
+    }
+  
+  intr_set_level (old_level);
+  
+  /* Wait for the lock (this blocks if lock is held) */
   sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  
+  /* We got the lock! */
+  old_level = intr_disable ();
+  
+  /* Clear waiting state */
+  cur->waiting_on = NULL;
+  
+  /* We now hold this lock */
+  lock->holder = cur;
+  
+  /* Add to our list of held locks */
+  list_push_back (&cur->held_locks, &lock->elem);
+  
+  intr_set_level (old_level);
 }
 
 /** Tries to acquires LOCK and returns true if successful or false
@@ -231,8 +284,24 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  enum intr_level old_level = intr_disable ();
+  
+  /* Remove this lock from our held_locks list */
+  list_remove (&lock->elem);
+  
+  /* No longer holding the lock */
   lock->holder = NULL;
+  
+  /* Recalculate priority (we lost donations from this lock) */
+  thread_update_priority (thread_current ());
+  
+  intr_set_level (old_level);
+  
+  /* Release the lock - wake a waiting thread */
   sema_up (&lock->semaphore);
+  
+  /* We might need to yield if our priority dropped */
+  thread_yield_if_not_highest ();
 }
 
 /** Returns true if the current thread holds LOCK, false
@@ -316,9 +385,13 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
+  if (!list_empty (&cond->waiters)) {
+    /* Sort by priority of threads waiting on semaphores */
+    list_sort(&cond->waiters, cond_priority_less, NULL);
+    
     sema_up (&list_entry (list_pop_front (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
+  }
 }
 
 /** Wakes up all threads, if any, waiting on COND (protected by
@@ -335,4 +408,18 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 
   while (!list_empty (&cond->waiters))
     cond_signal (cond, lock);
+}
+
+
+bool
+cond_priority_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct semaphore_elem *sa = list_entry(a, struct semaphore_elem, elem);
+  struct semaphore_elem *sb = list_entry(b, struct semaphore_elem, elem);
+  
+  /* Get the threads waiting on each semaphore */
+  struct thread *ta = list_entry(list_front(&sa->semaphore.waiters), struct thread, elem);
+  struct thread *tb = list_entry(list_front(&sb->semaphore.waiters), struct thread, elem);
+  
+  return ta->priority > tb->priority;
 }
