@@ -152,6 +152,11 @@ frame_free (struct frame *f)
      Hint: You need to mark this frame as free again 
      so it can be reused by other pages.
      Do NOT remove the lock operations. */
+     ASSERT (lock_held_by_current_thread (&f->lock));
+  
+  /* Mark the frame as free by setting its page to NULL.
+     This allows the frame to be reused by other pages. */
+  f->page = NULL;
 
   lock_release (&f->lock);
 }

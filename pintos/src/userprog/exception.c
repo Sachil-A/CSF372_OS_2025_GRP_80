@@ -123,37 +123,44 @@ kill (struct intr_frame *f)
 static void
 page_fault (struct intr_frame *f) 
 {
-  bool not_present;  /* True: not-present page, false: writing r/o page. */
+   bool not_present;  /* True: not-present page, false: writing r/o page. */
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
 
   /* Obtain faulting address, the virtual address that was
-     accessed to cause the fault.  It may point to code or to
-     data.  It is not necessarily the address of the instruction
-     that caused the fault (that's f->eip).
-     See [IA32-v2a] "MOV--Move to/from Control Registers" and
-     [IA32-v3a] 5.15 "Interrupt 14--Page Fault Exception
-     (#PF)". */
-  asm ("movl %%cr2, %0" : "=r" (fault_addr));
+     accessed to cause the fault. */
+//   asm ("movl %%cr2, %0" : "=r" (fault_addr));
+asm ("movl %%cr2, %0" : "=r" (fault_addr));
 
   /* Turn interrupts back on (they were only off so that we could
      be assured of reading CR2 before it changed). */
   intr_enable ();
 
+  /* Increment page fault count */
+  page_fault_cnt++;
 
-  /* TODO: Determine cause of fault
-       - not_present: page not present
-       - write: access was a write
-       - user: access by user
-   */
+  /* Determine cause of fault by parsing the error code */
+  not_present = (f->error_code & PF_P) == 0;  /* Page not present */
+  write = (f->error_code & PF_W) != 0;        /* Write access */
+  user = (f->error_code & PF_U) != 0;         /* User mode access */
 
-   /* TODO: Implement demand paging here
-       - Call your page_in() or similar
-       - Allocate stack pages if necessary
-       - Evict pages if needed
-       - Return to user if successful
-    */
+  /* Handle demand paging for not-present pages */
+  if (not_present)
+    {
+      /* Try to page in the faulting address */
+      if (page_in (fault_addr))
+        {
+          /* Successfully paged in - return to user program */
+          return;
+        }
+    }
+
+  /* If we get here, we couldn't handle the page fault:
+     - Page was present but there was a rights violation (write to read-only)
+     - Kernel tried to access user memory improperly
+     - page_in() failed (invalid address, out of memory, etc.)
+     Kill the process. */
 
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,

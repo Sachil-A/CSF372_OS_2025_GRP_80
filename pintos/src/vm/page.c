@@ -8,6 +8,7 @@
 #include "threads/thread.h"
 #include "userprog/pagedir.h"
 #include "threads/vaddr.h"
+#include "lib/debug.h"
 
 /* Maximum size of process stack, in bytes. */
 /* Right now it is 1 megabyte. */
@@ -45,7 +46,21 @@ page_for_addr (const void *address)
   // TODO: Use hash_find to look it up
   // TODO: Return the found vm_page (or NULL if not found)
 
-  return NULL;
+   /* Round address down to page boundary */
+  void *page_addr = pg_round_down (address);
+  
+  /* Create a temporary page for hash lookup */
+  struct page p;
+  p.addr = page_addr;
+  
+  /* Look up the page in the hash table */
+  struct hash_elem *e = hash_find (thread_current ()->pages, &p.hash_elem);
+  
+  /* Return the found page, or NULL if not found */
+  if (e != NULL)
+    return hash_entry (e, struct page, hash_elem);
+  else
+    return NULL;
 }
 
 /* Locks a frame for page P and pages it in.
@@ -201,7 +216,42 @@ page_accessed_recently (struct page *p)
    allocation fails. */
 struct page *
 page_allocate (void *vaddr, bool read_only)
-{
+{struct thread *t = thread_current ();
+  struct page *p;
+  
+  /* Round down to page boundary */
+  void *page_addr = pg_round_down (vaddr);
+  
+  /* Check if page already exists */
+  p = page_for_addr (page_addr);
+  if (p != NULL)
+    return NULL; /* Already mapped */
+  
+  /* Allocate new page structure */
+  p = malloc (sizeof (struct page));
+  if (p == NULL)
+    return NULL;
+  
+  /* Initialize page structure */
+  p->addr = page_addr;
+  p->read_only = read_only;
+  p->thread = t;
+  p->frame = NULL;
+  p->sector = (block_sector_t) -1;  /* CRITICAL BUG FIX: Mark as not in swap */
+  p->file = NULL;
+  p->file_offset = 0;
+  p->file_bytes = 0;
+  p->private = false;
+  
+  /* Insert into hash table */
+  if (hash_insert (t->pages, &p->hash_elem) != NULL)
+    {
+      /* Duplicate entry - shouldn't happen */
+      free (p);
+      return NULL;
+    }
+  
+  return p;
 
 }
 
@@ -216,6 +266,30 @@ page_deallocate (void *vaddr)
    - Lookup page with page_for_address()
    - If found, remove from hash (inside lock) and free()
 */
+ struct page *p;
+  
+  /* Round address down to page boundary */
+  void *page_addr = pg_round_down (vaddr);
+  
+  /* Look up the page */
+  p = page_for_addr (page_addr);
+  if (p == NULL)
+    return; /* Page doesn't exist */
+  
+  /* Lock the frame if it exists */
+  frame_lock (p);
+  
+  /* Free the frame if allocated */
+  if (p->frame != NULL)
+    {
+      frame_free (p->frame);
+    }
+  
+  /* Remove from hash table */
+  hash_delete (thread_current ()->pages, &p->hash_elem);
+  
+  /* Free the page structure */
+  free (p);
 }
 
 /* Returns a hash value for the page that E refers to. */
