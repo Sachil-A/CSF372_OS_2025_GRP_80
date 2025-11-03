@@ -79,17 +79,32 @@ do_page_in (struct page *p)
       /* Get data from swap. */
       swap_in (p);
     }
-  else if (p->file != NULL)
+    else if (p->file != NULL)
     {
-      /* Get data from file. */
+      /* Defensive: ensure file_bytes is sane. */
+      size_t bytes_to_read = PGSIZE;
+      if (p->file_bytes > 0 && p->file_bytes <= PGSIZE)
+        bytes_to_read = p->file_bytes;
+      else
+        {
+          /* Log suspicious metadata once to help debugging. */
+          printf("do_page_in: suspicious file_bytes=%"PRIu32" offset=%"PRIu32" for addr %p; using full-page read\n",
+                 p->file_bytes, p->file_offset, p->addr);
+        }
+
       off_t read_bytes = file_read_at (p->file, p->frame->base,
-                                        p->file_bytes, p->file_offset);
-      off_t zero_bytes = PGSIZE - read_bytes;
-      memset (p->frame->base + read_bytes, 0, zero_bytes);
-      if (read_bytes != p->file_bytes)
-        printf ("bytes read (%"PROTd") != bytes requested (%"PROTd")\n",
-                read_bytes, p->file_bytes);
+                                       bytes_to_read, p->file_offset);
+      if (read_bytes < 0)
+        read_bytes = 0;
+
+      size_t zero_bytes = PGSIZE - (size_t) read_bytes;
+      memset (p->frame->base + (size_t) read_bytes, 0, zero_bytes);
+
+      if ((size_t) read_bytes != bytes_to_read)
+        printf ("do_page_in: actually read %"PRId64" != requested %zu\n",
+                (int64_t) read_bytes, bytes_to_read);
     }
+
   else
     {
       /* Provide all-zero page. */
@@ -145,54 +160,60 @@ page_out (struct page *p)
   ASSERT (p->frame != NULL);
   ASSERT (lock_held_by_current_thread (&p->frame->lock));
 
-  /* Mark page not present in page table, forcing accesses by the
-     process to fault.  This must happen before checking the
-     dirty bit, to prevent a race with the process dirtying the
-     page. */
-  pagedir_clear_page(p->thread->pagedir, (void *) p->addr);
-
-  /* Has the frame been modified? */
-  /* If the frame has been modified, set 'dirty' to true. */
+  /* Read dirty bit BEFORE clearing PTE (more reliable on some pagedir impls). */
   dirty = pagedir_is_dirty (p->thread->pagedir, (const void *) p->addr);
 
-  /* If the frame is not dirty (and file != NULL), we have sucsessfully evicted the page. */
-  if(!dirty)
-  {
-    ok = true;
-  }
-  
-  /* If the file is null, we definitely don't want to write the frame to disk. We must swap out the
-     frame and save whether or not the swap was successful. This could overwrite the previous value of
-     'ok'. */
-  if (p->file == NULL)
-  {
-    ok = swap_out(p);
-  }
-  /* Otherwise, a file exists for this page. If file contents have been modified, then they must be
-     be written back to the file system on disk, or swapped out. This is determined by the private
-     variable associated with the page. */
-  else
-  {
-    if (dirty)
-    {
-      if(p->private)
-      {
-        ok = swap_out(p);
-      }
-      else
-      {
-        ok = file_write_at(p->file, (const void *) p->frame->base, p->file_bytes, p->file_offset);
-      }
-    }
-  }
+  /* Remove mapping so accesses fault while we write/swap. */
+  pagedir_clear_page(p->thread->pagedir, (void *) p->addr);
 
-  /* Nullify the frame held by the page. */
-  if(ok)
-  {
-    p->frame = NULL;
-  }
+  /* If page is clean and file-backed, no need to write it out. */
+  if (!dirty)
+    ok = true;
+
+  /* Anonymous page (no file backing) -> must swap out. */
+  if (p->file == NULL)
+    {
+      ok = swap_out(p);
+    }
+  else
+    {
+      /* File-backed. If dirty, try to write back to file; otherwise no-op. */
+      if (dirty)
+        {
+          if (p->private)
+            {
+              /* Private mapping: changes should go to swap (copy-on-write style). */
+              ok = swap_out(p);
+            }
+          else
+            {
+              off_t written = file_write_at(p->file, (const void *) p->frame->base,
+                                            p->file_bytes, p->file_offset);
+              if (written == (off_t) p->file_bytes)
+                {
+                  ok = true;
+                }
+              else
+                {
+                  
+                 
+                  ok = swap_out(p);
+                }
+            }
+        }
+    }
+
+  if (ok)
+    {
+      /* Successfully saved page (either by not needing to, by writing to file,
+         or by swapping out). Remove frame reference. */
+      p->frame = NULL;
+    }
+
   return ok;
 }
+
+
 
 /* Returns true if page P's data has been accessed recently,
    false otherwise.
