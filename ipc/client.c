@@ -146,6 +146,7 @@ void fetch_and_print_document() {
 }
 
 void* print_doc_thread(void* arg) {
+    (void)arg;
     while (!shutdown_flag) {
         msleep(2000);
         if (!shutdown_flag) {
@@ -314,13 +315,9 @@ int main(int argc, char* argv[]) {
     
     process_commands();
     
-    // Wait for all operations to complete and print_doc to stabilize
-    msleep(1000);
-    
-    // Do one final document fetch to ensure we have the complete state
-    if (!shutdown_flag) {
-        fetch_and_print_document();
-    }
+    // Wait enough time to ensure print_doc runs at least once more after commands finish
+    // This gives time for any ongoing writes to complete and be captured
+    msleep(3000);
     
     shutdown_flag = 1;
     pthread_join(print_thread, NULL);
