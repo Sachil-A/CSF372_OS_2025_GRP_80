@@ -489,6 +489,11 @@ def main():
         # Run the test
         result = run_test(test_config, pipe_output=pipe_output)
 
+        if(result): 
+            print("\nOverall Test Result: ✓ PASSED" ) 
+        else:
+            print("\nOverall Test Result: ✗ FAILED" )
+
         # Exit with appropriate code
         sys.exit(0 if result else 1)
 
